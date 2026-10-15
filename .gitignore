@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+node_modules/
+mujoco_menagerie/
+*.mp4
+*.webm
+.env
+.env.*
+MUJOCO_LOG.TXT
