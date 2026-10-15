@@ -1,6 +1,6 @@
-# Gemini Robotics Skills
+# Gemini Robotics Agent Skills
 
-Three [Agent Skills](https://agentskills.io) that teach coding agents (Claude Code, Antigravity, Gemini CLI) to build
+Three [Agent Skills](https://agentskills.io) that teach coding agents (Claude Code, Antigravity, etc.) to build
 robot manipulation software. A perception and planning model (**Gemini Robotics-ER 2**) drives a simulated robot
 (**MuJoCo**, in the browser or in Python), which is visualized with **Three.js**.
 
@@ -39,14 +39,16 @@ cd ~/code/GeminiRobotics-Skills
 ./install.sh --copy ~/code/my-robot-project   # copy instead of symlink (Windows, containers, vendoring)
 ```
 
-Symlinks point back to your clone, so `git pull` updates every project. Restart the agent session after installing.
+Symlinks point back to your clone, so `git pull` updates everything. Restart the agent session after installing.
 
 | Agent | Project location | Global location | Invoke |
 |---|---|---|---|
 | Claude Code | `.claude/skills/<name>/SKILL.md` | `~/.claude/skills/<name>/` | Automatic by description, or `/gemini-robotics-er` |
 | Antigravity (app / IDE) | `.agents/skills/<name>/SKILL.md` | `~/.gemini/config/skills/<name>/` | Automatic, or `/<skill-name>` |
 | Antigravity CLI | `.agents/skills/` | `~/.gemini/antigravity-cli/skills/` | Automatic, or `/<skill-name>` |
-| Gemini CLI | `.agents/skills/` or `.gemini/skills/` | `~/.gemini/skills/` | `activate_skill` (asks consent) |
+
+>[!Note]
+>Feel free to open a PR to add support for your coding agent
 
 ## How the pieces fit
 
@@ -92,7 +94,7 @@ python mujoco-physics/scripts/panda_pick_place.py --menagerie mujoco_menagerie -
 
 ## How these skills were verified (Oct 2026)
 
-- **Docs:** ai.google.dev robotics overview, spatial, agentic, orchestration, streaming and video-progress pages;
+- **Docs:** [ai.google.dev](https://ai.google.dev/gemini-api/docs/robotics-overview) robotics overview, spatial, agentic, orchestration, streaming and video-progress pages;
   the Interactions API (overview, function calling, structured output, thinking, video); the Live API (capabilities,
   tools, sessions, ephemeral tokens); and Antigravity's skills docs.
 - **Notebook:** the official
@@ -123,7 +125,11 @@ python mujoco-physics/scripts/panda_pick_place.py --menagerie mujoco_menagerie -
 ## Keeping them current
 
 - The model IDs are previews. Check <https://ai.google.dev/gemini-api/docs/robotics-overview> for new endpoints and
-  deprecations. ER 1.6 was shut down on 31 Aug 2026.
+  deprecations.
 - After upgrading an SDK, rerun the quick checks. For JS WASM changes, compare against
   `node_modules/@mujoco/mujoco/mujoco.d.ts`.
 - Keep each `SKILL.md` short. Put new detail in `references/`, and link to it from the decision tree.
+
+***
+
+Made in Colombia 🇨🇴 with Love ❤️
