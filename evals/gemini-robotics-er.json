@@ -1,0 +1,40 @@
+[
+  {
+    "id": "er-tool-schema-hygiene",
+    "skills": ["gemini-robotics-er"],
+    "files": [],
+    "query": "Write the Python tool handler and the system prompt for a `move_to_point` tool used by a Gemini Robotics-ER agent that drives a 5-DOF robot arm. The model sees frames from a USB webcam looking at the table and points in its usual [y, x] 0-1000 format; the handler must turn that into a robot motion. Include the function declaration you send to the model.",
+    "expected_behavior": [
+      "Scales normalized [y, x] using the dynamic dimensions of the frame sent to the model rather than hard-coded dimensions",
+      "Declares in the function schema every argument key that the handler extracts or reads from incoming arguments",
+      "System prompt specifies a single consistent pointing convention matching the controller's expectation (e.g. bottom contact point or center)",
+      "Limits physical robot execution to at most one physical command per model turn, returning an error for any extra physical calls",
+      "Validates workspace boundaries and kinematic reachability before sending motion commands to the robot"
+    ]
+  },
+  {
+    "id": "er-live-session-resilience",
+    "skills": ["gemini-robotics-er"],
+    "files": ["evals/fixtures/fragile_live_loop.py"],
+    "query": "This Live API loop (google-genai Python SDK) drives a robot arm: it streams webcam video at about 1 FPS and executes the model's tool calls. Make it robust enough for a 30-minute session.",
+    "expected_behavior": [
+      "Persists session resumption handle from server updates and supplies it when reconnecting across connection drops",
+      "Reconnects automatically on server disconnects and go_away messages, re-establishing session state",
+      "Enables sliding-window context compression so the 30-minute video stream does not exhaust the token window",
+      "Stops robot motion or commands safe holding during connection uncertainty or reconnect attempts",
+      "Differentiates transient errors (retried with backoff) from fatal errors (raises immediately after stopping the robot)"
+    ]
+  },
+  {
+    "id": "er-real-camera-deparallax",
+    "skills": ["gemini-robotics-er"],
+    "files": [],
+    "query": "Write Python that returns the table-plane position (mm, robot base frame) of an ArUco tag mounted on a robot gripper, 100 mm above the table, from one RGB webcam frame. The table has a printed mat with 4 ArUco markers (DICT_4X4_50) at known table coordinates. The camera is not calibrated; its nominal horizontal FOV is 62.2 degrees.",
+    "expected_behavior": [
+      "Corrects for height parallax by ray-tracing or applying elevation scaling with camera optical center rather than mapping the 100 mm elevated tag directly through the ground plane homography",
+      "Estimates camera optical center using nominal camera intrinsics and marker solvePnP/IPPE rather than attempting to fit focal length from planar homography",
+      "Accounts for OpenCV corner coordinate convention (half-pixel offset) when mapping detected marker corners to continuous coordinates",
+      "Outputs table-plane coordinates (x, y) in robot frame after elevation compensation"
+    ]
+  }
+]

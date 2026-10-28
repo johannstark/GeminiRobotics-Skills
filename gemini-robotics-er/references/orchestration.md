@@ -12,6 +12,10 @@ version, see `live-api.md`.
 - [Wiring tools to a simulator or robot](#wiring-tools-to-a-simulator-or-robot)
 - [Closed loop with fresh images](#closed-loop-with-fresh-images)
 - [Designing the robot API](#designing-the-robot-api)
+- [ER proposes, the controller measures](#er-proposes-the-controller-measures)
+- [The prompt is a contract the controller enforces](#the-prompt-is-a-contract-the-controller-enforces)
+- [Fine-grained tools vs smart stateless primitives](#fine-grained-tools-vs-smart-stateless-primitives)
+- [The verification ladder](#the-verification-ladder)
 - [TypeScript port](#typescript-port)
 - [legacy generateContent version](#legacy-generatecontent-version)
 
@@ -232,6 +236,114 @@ video progress (video-progress.md).
 - Add an explicit `task_complete(summary)` or `report_failure(reason)` function if you need a structured end state.
 - For multi-robot setups, give each robot its own namespace (`left_arm_move`, `right_arm_move`) or a `robot` enum.
 - Keep the step cap (`max_steps`) and a wall-clock timeout. Log every call and result.
+
+## ER proposes, the controller measures
+
+ER's visual pointing drifts by roughly $25\text{ mm}$ between consecutive calls at a $5\text{ cm}$ hover height.
+Attempting to close a fine-grained visual servoing loop with ER prompts fails:
+- **Failed prompt approaches**:
+  1. Asking ER for prompted `[dy, dx]` millimeter offsets.
+  2. A report-only ER visual fingertip locator.
+  3. A verify-and-correct visual feedback loop with `visual_offset_delta`.
+- **What actually works**: ER selects *which object* to interact with and proposes an approximate $[y, x]$ coordinate.
+  Physical geometry and sensors measure millimeters:
+  1. **Snap ER points**: Snap ER's proposal to a 2D CV-detected contour (color blob or segmentation) within an
+     $80/1000$ normalized radius ($80/1000$ bounds typical ER pointing jitter of $\sim 25\text{ mm}$ at $5\text{ cm}$ hover).
+  2. **Lock identity in metric space**: Project the pre-motion detection to table-plane millimeters ($Z = 0$),
+     lock the object identity, and match subsequent proposals within a $40\text{ mm}$ metric radius (object radius
+     plus motion margin).
+  3. **Echo canonical point**: Echo the snapped canonical coordinate back to the model in the tool response.
+  4. **Measured fields override visual estimates**: When the gripper carries an ArUco fiducial tag, FK combined
+     with ray-plane deparallax measures millimeters directly. In the system prompt, state:
+     `"Measured fields in tool results override your visual estimate."`
+  5. **Explicit next action**: Returning an explicit `"next"` hint in tool failure results
+     (e.g., `"next": "move_to_point(point=[412, 518], z_mm=30)"`) enables the model to recover
+     from workspace and IK refusals reliably.
+  6. **Single source of truth**: Generate tool descriptions in the prompt and function declarations from a single
+     code registry. Generate physical facts (table axes, marker IDs) from hardware configuration to eliminate drift.
+  7. **Schema hygiene**: Run `check_schema_hygiene(tools, handlers)`. If a handler reads an argument key not declared
+     in its schema, the model will never emit it, and downstream code will silently receive `None` or a default.
+
+## The prompt is a contract the controller enforces
+
+Never rely on prompt instructions that the controller does not strictly enforce in code:
+- **Single pointing contract**: Specify exactly one pointing rule. Do not contradict instructions by asking for
+  "the object center" in one sentence and "the exact bottom contact point" in another.
+- **One physical action per turn**: Prompting the model to perform "one physical action per turn" is not enough;
+  the controller must enforce it. If the model returns multiple physical tool calls in a single turn, execute the
+  first physical call and return:
+  `{"status": "error", "reason": "one physical action per turn; re-issue after observing"}` with `is_error: True`
+  for the remaining calls.
+- **Plan → Validate → Execute loop**: Validate every parameter (schema types, 3D workspace bounding box,
+  IK feasibility and residual tolerance, and camera frame freshness) *before* issuing actuator commands.
+  Refuse motion immediately with an actionable error if any validation fails.
+
+## Fine-grained tools vs smart stateless primitives
+
+| Paradigm | Tools | Pros / Cons | Recommendation |
+|---|---|---|---|
+| Fine-grained primitives | `move(point, z)`, `open()`, `close()` | High planning flexibility, but forces complex cross-turn target lock state that churns (`no_lock` → `retry_exhausted`). | Use only on high-accuracy robots with reliable real-time Cartesian controllers. |
+| Smart stateless primitives | `pick(point)`, `place(point)`, `inspect(point)` | Robust and self-contained: detects, aligns, descends vertically, verifies grip, and retracts within one call. | **Default for low-cost arms (e.g. SO-101)**. Keeps ER at the high-level task planning layer. |
+
+### Low-DOF toolset example (SO-101 style)
+
+```python
+SO101_TOOLS = [
+    {
+        "type": "function",
+        "name": "pick_object",
+        "description": "Picks an object at normalized [y, x] (0-1000). Aligns top-down, descends, grips, and lifts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "y": {"type": "integer", "description": "Normalized Y (0-1000)"},
+                "x": {"type": "integer", "description": "Normalized X (0-1000)"},
+            },
+            "required": ["y", "x"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "place_object",
+        "description": "Places the held object at normalized [y, x] (0-1000). Moves high, descends, opens, and lifts.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "y": {"type": "integer", "description": "Normalized Y (0-1000)"},
+                "x": {"type": "integer", "description": "Normalized X (0-1000)"},
+            },
+            "required": ["y", "x"],
+        },
+    },
+]
+```
+
+## The verification ladder
+
+Verify manipulation outcomes through a progression of increasingly rich, geometry-aware checks:
+
+```
+  Level 4: ER video progress classification (video-progress.md)
+     ▲
+  Level 3: ER multi-view before/after verification (spatial-reasoning.md)
+     ▲
+  Level 2: Geometry-aware vision veto (lift >= 5 cm before checking 2D overlap)
+     ▲
+  Level 1: Gripper aperture sensor (empty-jaw angle + 6 deg threshold)
+```
+
+1. **Gripper aperture sensor (Level 1)**:
+   Compare the gripper encoder angle against the closed-on-empty calibration. If $\theta \le \theta_{\text{empty}} + 6^\circ$,
+   the jaws have closed on air. Fail immediately without burning vision tokens.
+2. **Geometry-aware vision veto (Level 2)**:
+   Vision may only veto when the 3D geometry permits reliable distinction. A cube lifted only $3\text{ cm}$
+   still heavily overlaps its table footprint in an oblique camera view (IoU up to $0.6$). At $5\text{ cm}$ lift,
+   the IoU drops to $\le 0.3$. **Lift the arm at least $5\text{ cm}$ before evaluating visual grasp success.**
+3. **Pristine, post-motion frames**:
+   - Send only pristine, unannotated camera images to the model (keep debug bounding boxes and markers in a separate
+     operator buffer).
+   - Capture observation frames strictly **after** robot motion settles, verified by timestamp.
+   - Fail closed if no fresh frame is received within $0.5\text{ s}$ (`FRAME_FRESHNESS_TIMEOUT_S`). Never send placeholder frames.
 
 ## TypeScript port
 

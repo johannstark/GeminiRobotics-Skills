@@ -1,0 +1,37 @@
+[
+  {
+    "id": "threejs-workspace-mat-extents",
+    "skills": ["threejs-rendering"],
+    "files": ["evals/fixtures/workspace_corners.json"],
+    "query": "Draw the workspace mat (a flat plane with a thin border) in a Z-up Three.js scene from this corner config (mm, robot base frame): {\"top_left\": [452.8, -240.0], \"top_right\": [135.8, -240.0], \"bottom_right\": [135.8, 102.0], \"bottom_left\": [452.8, 102.0]}",
+    "expected_behavior": [
+      "The mat is drawn at 317 x 342 mm centred at (294.3, -69.0) mm (or meters equivalent: 0.317 x 0.342 m centred at (0.2943, -0.0690) m)",
+      "Computes bounding box extents across all 4 corner coordinates without assuming a fixed corner index ordering",
+      "Orients the plane flat on the table in the Z-up coordinate system"
+    ]
+  },
+  {
+    "id": "threejs-export-compiled-meshes",
+    "skills": ["threejs-rendering"],
+    "files": [],
+    "query": "Write the Python side that exports a MuJoCo model's visual meshes for a Three.js viewer served by FastAPI, and the JavaScript that loads them and places them each frame from the body poses the server sends.",
+    "expected_behavior": [
+      "Exports compiled mesh geometry (mesh_vert and mesh_face) rather than uncompiled raw CAD or STL asset files",
+      "Differentiates geoms by geom_type so primitive visual geoms (boxes, spheres, cylinders) are not exported as mesh assets",
+      "Caches exported assets keyed by model hash to prevent re-exporting on every request",
+      "JavaScript maps body transforms from MuJoCo coordinate convention (xpos and xquat wxyz to xyzw) onto Three.js scene groups"
+    ]
+  },
+  {
+    "id": "threejs-robust-polling-transport",
+    "skills": ["threejs-rendering"],
+    "files": [],
+    "query": "Write the Three.js frontend code that polls `/api/sim_state` (returns MuJoCo body positions and quaternions) about 30 times per second and updates the scene smoothly.",
+    "expected_behavior": [
+      "Enforces an in-flight guard to prevent multiple concurrent HTTP poll requests",
+      "Drops stale out-of-order packets based on sequence number within the same session or epoch",
+      "Bypasses sequence check and snaps transforms immediately when reset_epoch or session_id changes",
+      "Updates a connection freshness indicator or triggers disconnect when responses stop arriving"
+    ]
+  }
+]

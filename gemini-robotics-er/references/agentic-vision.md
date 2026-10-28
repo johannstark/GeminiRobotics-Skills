@@ -8,6 +8,11 @@ It only works on `gemini-robotics-er-2-preview`, not on the streaming model.
 Inside the sandbox the image you sent is a file named `input_file_0.png`. Files the model saves can
 come back as image content in `model_output` steps.
 
+## Contents
+- [Call and parse every step](#call-and-parse-every-step)
+- [Prompts that worked in the notebook](#prompts-that-worked-in-the-notebook)
+- [Tips](#tips)
+
 ## Call and parse every step
 
 ```python
