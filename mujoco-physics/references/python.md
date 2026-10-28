@@ -13,6 +13,9 @@ Snippets were run with `mujoco` 3.16.0 on macOS (Python 3.12) and Menagerie `fra
 - [Intrinsics and deprojection](#intrinsics-and-deprojection)
 - [Recording episode video](#recording-episode-video)
 - [Streaming to a browser](#streaming-to-a-browser)
+- [MuJoCo inside a web server](#mujoco-inside-a-web-server)
+- [The sim as an oracle for a real camera](#the-sim-as-an-oracle-for-a-real-camera)
+- [Test harness patterns](#test-harness-patterns)
 - [Troubleshooting](#troubleshooting)
 
 ## Install and get robots
@@ -193,16 +196,61 @@ To render a Python sim in Three.js, stream `xpos`/`xquat` per body as Float32 ov
 `threejs-rendering/references/remote-python.md`. Body order must match on both sides. Load the same MJCF in the
 browser (WASM, never stepped) only to build meshes, or send the geometry once.
 
+## MuJoCo inside a web server
+
+Rules for asynchronous backends (FastAPI, Gradio):
+1. **One stepping owner**: Exactly one thread calls `mj_step`. Motion commands update `data.ctrl` and wait on time; never call `mj_step` from routes or controllers.
+2. **Dedicated render thread**: Create `mujoco.Renderer` on its own thread; EGL contexts have OS thread affinity, so never lazy-render on the caller's thread. Split locks: `update_scene(data)` under physics lock, `render()` under render lock.
+3. **No MuJoCo work in `async def`**: Never acquire physics locks or call MuJoCo functions inside `async def` handlers. Read pre-published atomic snapshots or offload via `asyncio.to_thread`.
+4. **`MUJOCO_GL` before import**: Set `os.environ["MUJOCO_GL"] = "egl"` before importing `mujoco` anywhere in the app (test via subprocess, not runtime mutation).
+
+## The sim as an oracle for a real camera
+
+A simulated camera is an ideal ground-truth oracle for validating the real-world perception pipeline:
+
+1. **Synthetic homography generation**:
+   Compute the simulation camera homography by projecting known 3D mat corner coordinates $[X, Y, 0]$ into the
+   camera image using `cam_xpos`, `cam_xmat`, and `cam_fovy`, with a $+0.5\text{ px}$ shift matching OpenCV's
+   pixel convention.
+2. **Camera pose test**:
+   Feed the synthetic homography to `camera_from_homography` (from the `gemini-robotics-er` skill, `scripts/table_grounding.py`)
+   and assert that the recovered optical center $C$ matches `data.cam_xpos` to within $5\text{ mm}$.
+3. **ArUco textures and specular lighting**:
+   Texture fiducial markers on $1\text{ mm}$ thin boxes with `specular="0"`. High specular glare blinds ArUco detection.
+4. **Neutral floors**:
+   Use a matte, neutral gray floor (`rgba="0.6 0.6 0.6 1"`). Colored or checkerboard textures cause HSV color
+   detection false positives.
+5. **Match camera FOV explicitly**:
+   Set the simulation camera's vertical field of view to match the physical webcam's active horizontal FOV:
+   $$fovy = 2 \cdot \arctan\left(\tan\left(\frac{hfov}{2}\right) \cdot \frac{H}{W}\right)$$
+   Document clearly which perception constants transfer directly to reality and which are sim-only.
+
+## Test harness patterns
+
+Follow these patterns when writing offline simulation tests (see also the `gemini-robotics-er` skill, `testing.md`):
+- **Seeded RNG**: Always seed random number generators (`np.random.default_rng(seed)`) to ensure identical object
+  placement across test runs.
+- **`slow` pytest marker**: Mark physics-heavy integration runs with `@pytest.mark.slow` so fast unit tests run quickly.
+- **No-op `time.sleep`**: In test suites, patch the module's local `time.sleep` rather than global Python sleep.
+- **Cube-spawn clearance**: Ensure initial cube placements have at least $2\text{ cm}$ clearance from the home jaw pose;
+  otherwise, the cube can spawn inside the gripper collision volume.
+- **Metric thresholds**: Assert all spatial tolerances in metric millimeters in the table plane.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
 | `XML Error: ... could not open file` | Wrong `meshdir`/relative path. Load from the robot's folder, or use `assets=` |
 | `keyframe ... invalid qpos size` | Extend `key.qpos` for added free joints |
-| Render crash or blank on Linux | Set `MUJOCO_GL=egl` or `osmesa`; render size must be ≤ `offwidth`/`offheight` |
+| Render crash or blank on Linux | Set `MUJOCO_GL=egl` or `osmesa` before the first `import mujoco`; render size must be ≤ `offwidth`/`offheight` |
 | `launch_passive` fails on macOS | Run with `mjpython` |
 | Deprojected point floats mid-air | The ray hit the robot (occlusion). Check `seg`, or move the arm or objects |
 | Arm doesn't move | Writing `qpos` instead of `ctrl`, wrong actuator index, or ctrl outside `ctrlrange` |
-| Object slips | Raise friction / `condim=4`, lower mass, close longer, check the gripper value and direction |
+| Object slips or left behind during lift | Writing `qpos` teleports the arm with zero `qvel`, leaving the object behind. Command `ctrl`. Check pad friction (use ~1.8) and `forcerange` window (±1.5 N·m). |
+| Cube squeezed out sideways | Gripper forcerange is too high (3.35 N·m). Reduce actuator `forcerange` to `[-1.5, 1.5]`. |
+| Jaws cannot report "empty" aperture | Friction pads collide with each other. Add `<exclude body1="gripper" body2="moving_jaw_so101_v1"/>`. |
+| Finger penetrates object on descent | TCP site defined at fixed jaw inner face rather than grasp midpoint. Re-derive TCP between pads. |
+| Sim runs faster than real time | Multiple threads calling `mj_step` (e.g. frame loop + motion command). Establish one stepping owner. |
+| `gladLoadGL error` over SSH | No X11 display found. Set `os.environ["MUJOCO_GL"] = "egl"` before `import mujoco`. |
 | Explodes or NaN | Bodies overlap at t=0, tiny inertia, large timestep, or extreme gains |
-| Joint limits seem 57× too tight | MJCF angles are in degrees by default |
+| Joint limits seem 57× too tight | MJCF angles are in degrees by default. Add `<compiler angle="radian"/>`. |
