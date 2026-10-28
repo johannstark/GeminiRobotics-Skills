@@ -6,6 +6,7 @@
 - [Mapping ER output to 3D](#mapping-er-output-to-3d)
 - [Recording canvas video](#recording-canvas-video)
 - [Debug overlays](#debug-overlays)
+- [Old patterns (version compatibility)](#old-patterns-version-compatibility)
 
 ## Snapshot of the visible canvas (the Franka demo)
 
@@ -153,3 +154,9 @@ export function recordCanvas(canvas: HTMLCanvasElement, fps = 10) {
   map to `cx = x`, `cy = y` directly. This is what `App.tsx::LogOverlay` does.
 - In 3D, use small cones or spheres at hits (`RenderSystem.addErMarker`), and a `Line` for trajectories.
 - Show the capture camera's frustum (`THREE.CameraHelper`) while developing, to catch pose mismatches.
+
+## Old patterns (version compatibility)
+
+The core library and addon examples must share one pinned Three.js version:
+- **r148+:** `examples/js` globals were removed; use ES modules from `three/examples/jsm/...`.
+- **r152+:** `renderer.outputEncoding` and `texture.encoding` were renamed to `outputColorSpace` and `colorSpace` (`THREE.SRGBColorSpace`).

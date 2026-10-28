@@ -125,14 +125,17 @@ python threejs-rendering/scripts/test_viewer_smoke.py
 - **Notebook:** the official
   [ER 2 notebook](https://github.com/google-gemini/robotics-samples/blob/main/Getting%20Started/gemini_robotics_er.ipynb),
   sections 1–5. Prompts and outputs are quoted verbatim.
-- **Code:** run against `google-genai` 2.32, `mujoco` 3.16, `@mujoco/mujoco` 3.16,
-  `mujoco-js` 0.0.7, `three` 0.164.1/0.186, `playwright` 1.64, and `websockets` 15.
+- **Code:** run against `google-genai` 2.32.0, `mujoco` 3.16.0, `@mujoco/mujoco` 3.16,
+  `mujoco-js` 0.0.7, `three` 0.164.1/0.186, `playwright` 1.64.0, `websockets` 16.1.1,
+  `fastapi` 0.162.0, `uvicorn` 0.54.0, `gradio` 6.30.0, and `httpx` 0.28.1.
   - Request bodies were validated against the SDK's own request models.
-  - MuJoCo simulations executed headlessly with Menagerie `franka_emika_panda` and `robotstudio_so101`.
-  - Three.js rendering verified in headless Chromium via Playwright.
+  - MuJoCo simulations executed headlessly (`MUJOCO_GL=egl`) with Menagerie `franka_emika_panda` and `robotstudio_so101`.
+  - Three.js rendering verified in headless Chromium via Playwright (`test_viewer_smoke.py`).
+  - Transport snippets in `threejs-rendering/references/remote-python.md` executed end-to-end: the WebSocket server streamed binary pose snapshots (`<II` header + `float32` `xpos`/`xquat`) from `robotstudio_so101` to a `websockets` client, and the FastAPI + Gradio app was verified with Starlette `TestClient` (`/viewer` `Cache-Control: no-store` and `/` Gradio mount without shadowing) plus a live `uvicorn` server streaming `/video_feed` multipart JPEGs to `httpx` with clean generator exit on disconnect.
+  - The Live API MuJoCo loop in `gemini-robotics-er/references/live-api.md` was executed offline against `FakeLiveClient`/`FakeLiveSession` (`er_tools.py`) driving the headless `panda_pick_place.py` scene with EGL rendering (confirming tool execution, post-action JPEG frame before `send_tool_response`, and `turn_complete` handling with no pending tool call).
 - **Evaluations (`evals/`):**
   Tested across 9 scenarios using fresh agent sessions with and without the skills (Claude Haiku and Opus, one run per cell, graded manually, 2026-10-21). Baseline agents scored 27/37 (Haiku) and 29/37 (Opus) without the skills, rising to 35/37 (Haiku) and 37/37 (Opus) with the skills installed. Scenarios live in `evals/`; run them by providing the query and fixtures to a fresh agent and checking outputs against `expected_behavior`.
-- **Not executed:** live calls to paid ER cloud endpoints. All client interactions tested using verified offline fakes and structural request validators.
+- **Not executed (checked against docs and SDK types only):** live calls to paid ER cloud endpoints (`interactions.create`, `aio.live.connect` against `gemini-robotics-er-2-streaming-preview`, `files.upload`, `authTokens.create`), Live API `part.thought` streaming behavior and server-side barge-in on video vs text/audio, and the browser polling/smoothing/marker TypeScript snippets in `remote-python.md`.
 
 ### Common mistakes these skills prevent
 

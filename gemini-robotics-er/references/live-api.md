@@ -59,7 +59,7 @@ avoid the artificial heartbeat:
    A single `LiveServerMessage` can arrive containing both a `tool_call` and `server_content.turn_complete=True`.
    **Do not terminate the loop on `turn_complete` if a tool call is present or in flight.** End only on
    `turn_complete` with no pending tool calls.
-5. **Thinking and thoughts**:
+5. **Thinking and thoughts** (follows the docs, not executed — requires the live `gemini-robotics-er-2-streaming-preview` endpoint to emit `part.thought` chunks):
    To stream model reasoning in the Live API, configure `thinking_config`:
    ```python
    config = types.LiveConnectConfig(
@@ -142,13 +142,15 @@ async def main():
                     for p in (sc.model_turn.parts if sc.model_turn else []) or []:
                         if p.text:
                             print(p.text, end="", flush=True)
-                    if sc.turn_complete:
+                    if sc.turn_complete and not msg.tool_call:    # only complete when no tool call is in flight
                         turn_done.set()
                 if msg.tool_call:
                     responses = []
                     for call in msg.tool_call.function_calls:
                         async with sim_lock:                      # long physics off the event loop
                             result = await asyncio.to_thread(execute_tool, call.name, call.args, state["depth"])
+                            jpeg, state["depth"] = capture()      # post-action frame before tool response
+                        await session.send_realtime_input(video=types.Blob(data=jpeg, mime_type="image/jpeg"))
                         responses.append(types.FunctionResponse(id=call.id, name=call.name, response=result))
                     await session.send_tool_response(function_responses=responses)
 
