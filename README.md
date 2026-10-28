@@ -15,18 +15,31 @@ and, where useful, `scripts/` (run them, don't paste them).
 
 ```
 ├── install.sh
+├── evals/
+│   ├── gemini-robotics-er.json
+│   ├── mujoco-physics.json
+│   └── threejs-rendering.json
 ├── gemini-robotics-er/
 │   ├── SKILL.md
-│   ├── references/  interactions-api · spatial-reasoning · agentic-vision · orchestration · video-progress · live-api
-│   └── scripts/er_tools.py          # helpers + offline selftest
+│   ├── references/  interactions-api · spatial-reasoning · agentic-vision · orchestration · video-progress · live-api · real-camera-grounding · testing
+│   └── scripts/
+│       ├── er_tools.py          # helpers + offline selftest
+│       └── table_grounding.py   # homography, IPPE camera pose, deparallax selftest
 ├── mujoco-physics/
 │   ├── SKILL.md
-│   ├── references/  python · wasm · ik-and-control
-│   └── scripts/panda_pick_place.py  # tested end-to-end sim pipeline
+│   ├── references/  python · wasm · ik-and-control · low-dof-arms
+│   └── scripts/
+│       ├── panda_pick_place.py  # 7-DOF Panda sim pipeline
+│       └── so101_pick_place.py  # 5-DOF low-cost arm pipeline with residual checks
 └── threejs-rendering/
     ├── SKILL.md
-    └── references/  geom-conversion · perception-and-video · remote-python
+    ├── references/  geom-conversion · perception-and-video · remote-python · testing
+    └── scripts/
+        ├── export_meshes.py     # compiled mesh & manifest exporter with selftest
+        └── test_viewer_smoke.py # headless Playwright viewer verification
 ```
+
+The scenarios live in `evals/`; to run one, give the query and fixtures to a fresh agent once with the skills installed and once without, then check its output against `expected_behavior`. Run them before large edits to the skills.
 
 ## Install
 
@@ -71,6 +84,8 @@ camera image / video ──► Gemini Robotics-ER 2 ──► [y,x] points / box
 | Python research loop with verification | MuJoCo Python script + ER orchestration + ER video progress |
 | Real-time voice or camera agent | ER Live API + MuJoCo (Python or WASM) |
 | Render a Python sim on the web | MuJoCo Python + Three.js remote-python |
+| Cheap real arm + webcam + ArUco mat | ER real-camera grounding + MuJoCo low-DOF + ER testing |
+| Python sim inside a Gradio/FastAPI app | MuJoCo Python (web server section) + Three.js remote-python |
 
 ### The Franka demo
 
@@ -83,13 +98,23 @@ The skills explain how to extend it with SDK 2.x, orchestration, video verificat
 ## Quick checks
 
 ```bash
-# offline logic tests for the ER helpers (no API key)
+# offline logic tests for the ER helpers, TargetLock, and mock sessions (no API key)
 python gemini-robotics-er/scripts/er_tools.py --selftest
 
-# full sim pipeline: scene → render → ER-format point → 3D → IK → pick-and-place → verify → MP4
-pip install mujoco numpy pillow "imageio[ffmpeg]"
-git clone --depth 1 https://github.com/google-deepmind/mujoco_menagerie.git
-python mujoco-physics/scripts/panda_pick_place.py --menagerie mujoco_menagerie --video episode.mp4   # exit 0 = success
+# real-camera grounding: homography, IPPE camera pose, and deparallax
+python gemini-robotics-er/scripts/table_grounding.py --selftest
+
+# 7-DOF Panda sim pipeline: scene → render → ER-format point → 3D → IK → pick-and-place → verify
+python mujoco-physics/scripts/panda_pick_place.py --menagerie mujoco_menagerie --video episode.mp4
+
+# 5-DOF low-cost arm (SO-101) sim: ray-plane deprojection, 5-DOF IK, settle-on-convergence (exit 0)
+MUJOCO_GL=egl python mujoco-physics/scripts/so101_pick_place.py --menagerie mujoco_menagerie --trials 10 --seed 0
+
+# compiled mesh & manifest exporter (verifies compiled geometry, caching, geom branching)
+python threejs-rendering/scripts/export_meshes.py --selftest
+
+# headless Playwright viewer smoke test (verifies non-blank canvas, mesh count, quaternion order)
+python threejs-rendering/scripts/test_viewer_smoke.py
 ```
 
 ## How these skills were verified (Oct 2026)
@@ -100,15 +125,26 @@ python mujoco-physics/scripts/panda_pick_place.py --menagerie mujoco_menagerie -
 - **Notebook:** the official
   [ER 2 notebook](https://github.com/google-gemini/robotics-samples/blob/main/Getting%20Started/gemini_robotics_er.ipynb),
   sections 1–5. Prompts and outputs are quoted verbatim.
-- **Code:** run against `google-genai` 2.31, `@google/genai` 2.30, `mujoco` 3.16, `@mujoco/mujoco` 3.16,
-  `mujoco-js` 0.0.7, `three` 0.186 and `websockets` 15.
+- **Code:** run against `google-genai` 2.32, `mujoco` 3.16, `@mujoco/mujoco` 3.16,
+  `mujoco-js` 0.0.7, `three` 0.164.1/0.186, `playwright` 1.64, and `websockets` 15.
   - Request bodies were validated against the SDK's own request models.
-  - MuJoCo and WASM snippets were executed with the Menagerie Panda.
-- **Not executed:** live calls to the ER endpoints and browser-only APIs (WebGL readback, `MediaRecorder`). These
-  follow the official docs and the SDK sources.
+  - MuJoCo simulations executed headlessly with Menagerie `franka_emika_panda` and `robotstudio_so101`.
+  - Three.js rendering verified in headless Chromium via Playwright.
+- **Evaluations (`evals/`):**
+  Tested across 9 scenarios using fresh agent sessions with and without the skills (Claude Haiku and Opus, one run per cell, graded manually, 2026-10-21). Baseline agents scored 27/37 (Haiku) and 29/37 (Opus) without the skills, rising to 35/37 (Haiku) and 37/37 (Opus) with the skills installed. Scenarios live in `evals/`; run them by providing the query and fixtures to a fresh agent and checking outputs against `expected_behavior`.
+- **Not executed:** live calls to paid ER cloud endpoints. All client interactions tested using verified offline fakes and structural request validators.
 
 ### Common mistakes these skills prevent
 
+- **IK-frame origin:** Measuring table corners or targets from the pan rotation axis rather than the kinematic base root (causes 35–45 mm X-offset grasping errors on offset-base arms).
+- **Camera HFOV & parallax:** Using nominal sim FOV for real lenses, or ignoring parallax on elevated objects (a 100 mm height produces > 15 mm spatial error if uncorrected).
+- **Grasp physics & qpos teleporting:** Teleporting arm or gripper joints via `qpos` (leaves `qvel=0`, eliminating contact friction and causing lifted objects to slip). Always command actuators via `ctrl`.
+- **Gripper force saturation:** Over-torquing gripper actuators (causes objects to squeeze out) or lifting before gripper servos stall.
+- **Silent IK fallback:** Permitting arm motion on unconverged IK results or substituting position-only solutions without checking residuals. Always raise `UnreachableError` before motion.
+- **Sim steppers in web routes:** Calling `mj_step` inside web endpoints or request handlers alongside a physics loop (causes sim time to outpace real time).
+- **Compiled meshes vs raw STLs:** Loading raw CAD files in Three.js (MuJoCo automatically re-centers and re-orients meshes at compile time; loading raw STLs causes link misalignments). Always export compiled `mesh_vert`/`mesh_face`.
+- **Viewer state polling:** Polling state endpoints without an in-flight guard, monotonic sequence numbers, or reset epoch detection (causes jerky out-of-order motion and sliding on resets).
+- **Prompt/controller contradictions:** Prompts promising footprint grounding while controllers pass raw object points, or prompts requiring single physical actions while controllers batch multiple.
 - Passing `config=GenerateContentConfig(...)` to `client.interactions.create`. Use `generation_config` /
   `response_format` / `tools` / `system_instruction`, and resend them on every turn.
 - Reading `.text` / `.function_calls` on an Interaction. Read `output_text` and `steps`.

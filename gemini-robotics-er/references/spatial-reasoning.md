@@ -169,7 +169,7 @@ r = client.interactions.create(model=MODEL_ID, input=[
 
 1. Point or box centre `[y, x]` → pixel `(u, v)` in the **image that was sent**. If you resized or
    cropped before sending, map back first.
-2. Pixel → 3D: raycast (browser sim), depth deprojection (Python sim or RGB-D), or a table-plane intersection.
+2. Pixel → 3D: raycast (browser sim), depth deprojection (Python sim or RGB-D), or a table-plane intersection with an ArUco mat (see also `real-camera-grounding.md`).
 3. Top-surface hit → grasp height: subtract about half the object height. The Franka demo uses −2 cm for 4 cm cubes.
 4. Yaw from the box: if the box is wider than it is tall in the image, close the gripper across the image y
    axis, and vice versa. For a better result, ask ER for two points on opposite grasp edges.

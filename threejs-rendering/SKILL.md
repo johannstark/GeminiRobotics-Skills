@@ -1,6 +1,6 @@
 ---
 name: threejs-rendering
-description: Renders MuJoCo simulations with Three.js (in-browser WASM, a streamed Python MuJoCo process, or logs). Use for Z-up scene setup, converting MuJoCo geoms and meshes to Three.js meshes, per-frame body pose sync (wxyz quaternions), capturing camera snapshots and canvas video for Gemini Robotics-ER, mapping ER [y, x] 0-1000 points to 3D by raycasting, projecting 3D back to image coordinates, and debugging sideways, twisted, mis-sized or blank renders.
+description: Renders MuJoCo simulations with Three.js (in-browser WASM or streamed Python). Use when setting up Z-up scenes, exporting compiled mesh manifests, per-frame body pose sync (wxyz to xyzw quaternions), streaming poses via WebSockets or robust polling with in-flight guards and reset epoch snapping, embedding 3D viewers in FastAPI or Gradio with no-store cache control, capturing snapshots/video for Gemini Robotics-ER, deprojecting ER [y, x] points to 3D, running headless Playwright viewer tests, or debugging offset, twisted, zero-size, or blank renders.
 ---
 
 # Three.js rendering for MuJoCo
@@ -33,10 +33,13 @@ Set `camera.up` **before** creating `OrbitControls`, because the controls cache 
 |---|---|---|
 | **A. One `Group` per body** (the Franka demo) | Each body group holds its geoms at their local `geom_pos`/`geom_quat`. Copy `xpos`/`xquat` each frame. | Default. Picking via `userData.bodyID`. Works with any pose source. |
 | **B. `mjv_updateScene`** ([official demo](https://github.com/google-deepmind/mujoco/tree/main/wasm)) | Sync one pooled mesh per `scene.geoms` entry | You want MuJoCo's own decorations (contacts, tendons, sites) |
-| **C. Remote Python** | Python steps, and streams `xpos`/`xquat` over WebSocket. The browser runs A. | GPU, ROS, or real-robot bridges, heavy compute |
+| **C. Remote Python** | Python steps, and streams `xpos`/`xquat` over WebSocket or polling. The browser runs A. | GPU, ROS, or real-robot bridges, heavy compute |
 
-Geom conversion: `references/geom-conversion.md`. Python streaming (tested server): `references/remote-python.md`.
+Geom conversion: `references/geom-conversion.md`. Python streaming & manifests: `references/remote-python.md`.
 Snapshots, perception camera, video, and pixel↔3D: `references/perception-and-video.md`.
+Tested scripts (`pip install mujoco playwright`):
+- `scripts/export_meshes.py`: run `MUJOCO_GL=egl python threejs-rendering/scripts/export_meshes.py --selftest` or import `export_compiled_meshes`.
+- `scripts/test_viewer_smoke.py`: run `python threejs-rendering/scripts/test_viewer_smoke.py` (headless smoke test; see `references/testing.md`).
 
 ## 3. Per-frame sync (approach A)
 
@@ -80,8 +83,18 @@ walking up to `userData.bodyID`. The hit is the top surface, so lower it to gras
 | Blank or black snapshot | `preserveDrawingBuffer: false`, or the pixels were read in a different task than the render |
 | Perception image darker than the screen | Render targets output **linear** colour (verified in three r186). Convert to sRGB (see the perception reference). |
 | ER markers offset | Camera moved, `[y, x]` swapped, image cropped or letterboxed, or the device-pixel-ratio canvas was resized differently |
+| Mat or workspace drawn with zero size or offset | JS recomputed extents from corner config with an ordering assumption; send extents from Python or use min/max. |
+| Meshes offset or rotated vs physics | Loaded raw STLs instead of compiled `mesh_vert`/`mesh_face` (MuJoCo re-centers meshes; use `scripts/export_meshes.py`). |
 | Memory grows on reload | `geometry.dispose()`, `material.dispose()`, `renderTarget.dispose()`, and delete the WASM model and data |
 | Jank at high speed | Too many `mj_step` calls per frame. Cap the steps, or move physics to a Worker. |
+
+<details>
+<summary>Old patterns (version compatibility)</summary>
+
+The core library and addon examples must share one pinned Three.js version:
+- **r148+:** `examples/js` globals were removed; use ES modules from `three/examples/jsm/...`.
+- **r152+:** `renderer.outputEncoding` and `texture.encoding` were renamed to `outputColorSpace` and `colorSpace` (`THREE.SRGBColorSpace`).
+</details>
 
 ## 6. In the Franka demo
 

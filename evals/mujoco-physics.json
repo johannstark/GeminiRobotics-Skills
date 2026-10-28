@@ -1,0 +1,38 @@
+[
+  {
+    "id": "mujoco-5dof-ik-residual-check",
+    "skills": ["mujoco-physics"],
+    "files": ["evals/fixtures/out_of_reach_target.py"],
+    "query": "Using MuJoCo in Python, solve IK for a top-down grasp (tool axis pointing straight down) at target_pos = [0.85, 0.40, 0.05] m for a 5-DOF SO-101 arm, and move the arm there.",
+    "expected_behavior": [
+      "Evaluates kinematic reachability and solver residual against a tolerance before executing any robot motion",
+      "Refuses arm motion and raises an error when the target exceeds the reach envelope (~0.35 m) instead of executing an unconverged position",
+      "Formulates 5-DOF IK with 3D position and tool-axis-down alignment constraints",
+      "Dispatches actuator commands through ctrl rather than qpos teleporting"
+    ]
+  },
+  {
+    "id": "mujoco-web-server-threading",
+    "skills": ["mujoco-physics"],
+    "files": ["evals/fixtures/naive_sim_server.py"],
+    "query": "Turn this into a FastAPI app that runs the simulation in real time and serves both a live rendered camera stream (MJPEG) and the state endpoint. It will run on a headless Linux server.",
+    "expected_behavior": [
+      "Runs physics stepping in exactly one dedicated background thread, keeping route handlers free of mj_step calls",
+      "Runs offscreen rendering on a dedicated thread with EGL context affinity instead of calling renderer in request handlers",
+      "Serves state from thread-safe cached snapshots or via asyncio.to_thread without blocking the asyncio event loop",
+      "Configures headless EGL rendering (MUJOCO_GL=egl) before importing mujoco"
+    ]
+  },
+  {
+    "id": "mujoco-so101-friction-grasp",
+    "skills": ["mujoco-physics"],
+    "files": ["evals/fixtures/naive_so101_grasp.py"],
+    "query": "In a MuJoCo SO-101 simulation (Menagerie robotstudio_so101) the cube slips out of the gripper during the lift. Here is the pick code. Fix it so the grasp holds.",
+    "expected_behavior": [
+      "Drives arm and gripper actuators via data.ctrl rather than teleporting joint positions with data.qpos",
+      "Adds friction pads to gripper jaws with collision bitmasks (contype/conaffinity) so pads collide with objects but not with each other or the floor",
+      "Limits gripper actuator force within a stable gripping window (~1.5 N·m) to prevent ejecting the cube",
+      "Pauses for servo convergence (settling position error and velocity) before executing the lift"
+    ]
+  }
+]

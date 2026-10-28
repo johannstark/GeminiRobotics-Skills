@@ -1,17 +1,14 @@
 # Inverse kinematics, control and pick-and-place
 
-Every snippet here was executed:
-
-- Python DLS and pick-and-place: `scripts/panda_pick_place.py` (cube placed in the tray, exit code 0).
-- TypeScript DLS: on `@mujoco/mujoco` 3.16 with the Panda. It reached `[0.45, 0.30, 0.15]` exactly in about 10 ms.
-- Mocap weld: tracked two goals to within 1 mm.
+Every snippet was executed: Python DLS (`scripts/panda_pick_place.py`), TypeScript DLS (`@mujoco/mujoco` 3.16), and mocap weld.
 
 ## Contents
 - [Choose a control strategy](#choose-a-control-strategy)
 - [Damped least squares IK (Python)](#damped-least-squares-ik-python)
+- [5-DOF IK with typed errors and residual checks](#5-dof-ik-with-typed-errors-and-residual-checks)
 - [Damped least squares IK (TypeScript / WASM)](#damped-least-squares-ik-typescript--wasm)
 - [Mocap + weld (no IK)](#mocap--weld-no-ik)
-- [Executing waypoints](#executing-waypoints)
+- [Executing waypoints & settle-on-convergence](#executing-waypoints--settle-on-convergence)
 - [Pick-and-place recipe](#pick-and-place-recipe)
 - [Grippers](#grippers)
 - [The Franka demo's analytical Franka IK](#the-franka-demos-analytical-franka-ik)
@@ -71,6 +68,86 @@ Variants:
 - **Null-space bias towards a rest pose** (7-DOF arms): `dq += (I - J⁺J) · k · (q_rest − q)`.
 - **Retry:** if it fails, reseed from a neutral pose (`[0, -0.785, 0, -2.356, 0, 1.571, 0.785]` for the Panda) before
   giving up. An unreachable target returns `None`. **Don't move** when that happens. Report it.
+
+> [!IMPORTANT]
+> **Check the residual BEFORE moving.** Never substitute a silent best-effort pose or ignore an unconverged IK return code. If the positional residual exceeds a documented tolerance (e.g., > 15 mm), the caller must raise a typed error (`UnreachableError`) and fail closed. Moving on a partial IK solution causes the arm to swing to an arbitrary configuration and miss or collide.
+
+## 5-DOF IK with typed errors and residual checks
+
+For 5-DOF arms (e.g. SO-100, SO-101, STS3215 class), a 6-DOF Cartesian pose $(x, y, z, roll, pitch, yaw)$ is overconstrained. The standard formulation constrains 3D position plus tool-axis-down alignment (cross product of tool axis with $[0, 0, -1]$ = 0), yielding a 5D error vector.
+
+```python
+class IkError(Exception):
+    """Base class for inverse kinematics failures."""
+
+class UnreachableError(IkError):
+    """Target position lies outside the reachable workspace."""
+
+class OrientationUnreachableError(IkError):
+    """Position is reachable but requested tool orientation cannot be satisfied."""
+
+def solve_ik_5dof(model, data, site_name, target_pos,
+                  target_axis=np.array([0.0, 0.0, -1.0]),
+                  max_residual_mm=15.0, iters=400, damping=1e-2, step=0.5,
+                  joints=("shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll")):
+    """Solves 5-DOF IK with position + tool-axis alignment constraints.
+
+    Returns (q, residual_mm, mode).
+    Raises UnreachableError if positional residual exceeds max_residual_mm BEFORE motion.
+    Raises OrientationUnreachableError if axis alignment cannot be satisfied.
+    """
+    ik = mujoco.MjData(model)
+    ik.qpos[:] = data.qpos
+    sid = model.site(site_name).id
+    dofs = np.array([model.joint(j).dofadr[0] for j in joints])
+    qadr = np.array([model.joint(j).qposadr[0] for j in joints])
+
+    # Pre-seed shoulder pan from target azimuth to avoid local minima
+    pan_adr = model.joint(joints[0]).qposadr[0]
+    ik.qpos[pan_adr] = np.arctan2(target_pos[1], target_pos[0])
+
+    jacp, jacr = np.zeros((3, model.nv)), np.zeros((3, model.nv))
+    for _ in range(iters):
+        mujoco.mj_forward(model, ik)
+        pos_err = np.asarray(target_pos) - ik.site_xpos[sid]
+
+        # Tool Z-axis in world frame
+        tool_z = ik.site_xmat[sid].reshape(3, 3)[:, 2]
+        axis_err = np.cross(tool_z, target_axis)
+
+        err5 = np.concatenate([pos_err, axis_err[:2]])
+        pos_res_mm = float(np.linalg.norm(pos_err) * 1000.0)
+        axis_res = float(np.linalg.norm(axis_err))
+
+        if pos_res_mm < 1.0 and axis_res < 0.05:
+            return ik.qpos[qadr].copy(), pos_res_mm, "aligned"
+
+        mujoco.mj_jacSite(model, ik, jacp, jacr, sid)
+        J = np.vstack([jacp, jacr[:2]])[:, dofs]
+        dq = np.zeros(model.nv)
+        dq[dofs] = step * (J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(5), err5))
+        mujoco.mj_integratePos(model, ik.qpos, dq, 1.0)
+        for j in joints:
+            jid = model.joint(j).id
+            if model.jnt_limited[jid]:
+                a = model.jnt_qposadr[jid]
+                ik.qpos[a] = np.clip(ik.qpos[a], *model.jnt_range[jid])
+
+    # Enforce strict residual check before any physical motion
+    final_pos_err = float(np.linalg.norm(np.asarray(target_pos) - ik.site_xpos[sid]) * 1000.0)
+    if final_pos_err > max_residual_mm:
+        raise UnreachableError(
+            f"Target position {target_pos} residual {final_pos_err:.1f} mm exceeds tolerance {max_residual_mm} mm"
+        )
+
+    tool_z = ik.site_xmat[sid].reshape(3, 3)[:, 2]
+    if np.linalg.norm(np.cross(tool_z, target_axis)) > 0.2:
+        raise OrientationUnreachableError(
+            f"Target {target_pos} reached with {final_pos_err:.1f} mm error but tool axis tilted > 0.2 rad"
+        )
+
+    return ik.qpos[qadr].copy(), final_pos_err, "relaxed"
+```
 
 ## Damped least squares IK (TypeScript / WASM)
 
@@ -155,7 +232,7 @@ XML equivalent: `<weld body1="target" body2="hand" relpose="0 0 0 1 0 0 0"/>`. I
 MjSpec defaults welded the hand at the wrong offset. The weld keeps whatever relative pose its data encodes,
 so always set it explicitly.
 
-## Executing waypoints
+## Executing waypoints & settle-on-convergence
 
 Joint-space interpolation with smoothstep easing, on position actuators:
 
@@ -171,6 +248,28 @@ def move_to(model, data, q_target, gripper, duration, record=None, fps=10):
         mujoco.mj_step(model, data)
         if record is not None and k % every == 0:
             record(data)
+
+def move_to_settle(model, data, q_target, gripper, max_seconds=3.0,
+                   pos_tol=0.0087, vel_tol=0.02, record=None, fps=10):
+    """Drives position actuators and waits until joints converge rather than a fixed time.
+
+    pos_tol: 0.0087 rad (~0.5 deg) maximum joint position error.
+    vel_tol: 0.02 rad/s maximum joint velocity across all arm joints.
+    """
+    arm_n = len(q_target)
+    data.ctrl[:arm_n] = q_target
+    data.ctrl[-1] = gripper
+    steps = int(max_seconds / model.opt.timestep)
+    every = max(1, int(1 / (fps * model.opt.timestep)))
+    for k in range(steps):
+        mujoco.mj_step(model, data)
+        if record is not None and k % every == 0:
+            record(data)
+        pos_err = np.max(np.abs(data.qpos[:arm_n] - q_target))
+        vel = np.max(np.abs(data.qvel[:arm_n]))
+        if pos_err < pos_tol and vel < vel_tol:
+            return True, (k + 1) * model.opt.timestep
+    return False, max_seconds
 ```
 
 - Joint interpolation moves the tool along a curve. For **vertical approach and lift**, interpolate in
@@ -231,6 +330,7 @@ It is fast and deterministic, but **Panda-only** and it ignores collisions. For 
 | Symptom | Cause / fix |
 |---|---|
 | Always `None` | Target out of reach, wrong site, or an impossible orientation. Check with position-only IK. |
+| Arm moved but missed by cm, with no error | Silent fallback or checked post-motion: solver stopped at workspace boundary but caller ignored residual and drove actuators anyway. Enforce residual check *before* motion and raise `UnreachableError`. |
 | Converges but the arm flips | Different IK branch. Seed from the current joints, add a null-space rest-pose bias. |
 | Wrist spins wildly | Orientation near singular. Raise `damping` (0.05), lower `step`. |
 | Tool tilted | Quaternion order mix-up (wxyz vs xyzw) or a wrong `DOWN` |

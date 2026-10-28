@@ -6,9 +6,11 @@ session and tools guides, and the ephemeral tokens guide. Config shapes were val
 ## Contents
 - [Specs and constraints](#specs-and-constraints)
 - [The three-part agent](#the-three-part-agent)
+- [Instruction-driven mode (no heartbeat)](#instruction-driven-mode-no-heartbeat)
 - [Complete Python agent driving MuJoCo](#complete-python-agent-driving-mujoco)
 - [Heartbeat rules](#heartbeat-rules)
-- [Long sessions](#long-sessions)
+- [Long sessions and resilience](#long-sessions-and-resilience)
+- [Production wrapper: LiveRobotSession](#production-wrapper-liverobotsession)
 - [Speech through TTS as a tool](#speech-through-tts-as-a-tool)
 - [Browser agent with ephemeral tokens](#browser-agent-with-ephemeral-tokens)
 - [Pitfalls](#pitfalls)
@@ -33,6 +35,42 @@ session and tools guides, and the ephemeral tokens guide. Config shapes were val
 
 Video frames alone don't trigger a turn. A turn needs text or audio. That is why proactive behaviour
 uses a **heartbeat**.
+
+| Interaction model | Transport & approach | When to choose |
+|---|---|---|
+| Step-by-step chat / UI | **Interactions API** (`client.interactions.create`) | Default when user issues one command at a time. Send a fresh image in each `function_result`. Simpler, stateless per turn. |
+| Streaming video / Voice | **Live API** (`client.aio.live.connect`) | Continuous camera feed (<= 1 FPS), real-time human voice intervention, or continuous visual monitoring. |
+
+## Instruction-driven mode (no heartbeat)
+
+When the robot is driven by discrete user instructions rather than an autonomous proactive loop,
+avoid the artificial heartbeat:
+1. **Send image then instruction**: Send one JPEG frame, immediately followed by the text prompt.
+2. **Stream 1 FPS video during BLOCKING tools**:
+   > [!NOTE] Verified against Live streaming API docs
+   > While a BLOCKING tool runs, text or audio input causes an immediate **barge-in** that cancels
+   > the active tool call. However, video frames sent via `session.send_realtime_input(video=...)`
+   > do *not* start a conversational turn or trigger barge-in. Streaming ~1 FPS video during motion
+   > feeds continuous visual progress to the model while physics steps.
+3. **Send post-action frame before tool response**:
+   Once robot motion settles, capture one fresh JPEG frame and send it via `send_realtime_input(video=...)`
+   *before* calling `session.send_tool_response(...)`. This guarantees the model sees the resulting state.
+4. **The `turn_complete` with `tool_call` rule**:
+   A single `LiveServerMessage` can arrive containing both a `tool_call` and `server_content.turn_complete=True`.
+   **Do not terminate the loop on `turn_complete` if a tool call is present or in flight.** End only on
+   `turn_complete` with no pending tool calls.
+5. **Thinking and thoughts**:
+   To stream model reasoning in the Live API, configure `thinking_config`:
+   ```python
+   config = types.LiveConnectConfig(
+       response_modalities=["TEXT"],
+       generation_config=types.GenerateContentConfig(
+           thinking_config=types.ThinkingConfig(thinking_level="medium", include_thoughts=True)
+       ),
+   )
+   ```
+   In the receive loop, inspect `part.thought` on parts of `msg.server_content.model_turn.parts`. Render
+   thought parts in a dedicated UI thought log.
 
 ## Complete Python agent driving MuJoCo
 
@@ -157,15 +195,33 @@ await session.send_realtime_input(audio_stream_end=True)          # when the mic
 - While a BLOCKING tool runs, don't send new input. The heartbeat above naturally pauses, because the turn
   isn't complete until after your tool response.
 
-## Long sessions
+## Long sessions and resilience
 
 | Limit | Mitigation |
 |---|---|
 | WebSocket connection about 10 min | `session_resumption=SessionResumptionConfig(handle=saved)`. Store `new_handle` from `session_resumption_update`, and reconnect on `go_away` or on a drop. The handle is valid for about 2 h on the Developer API. |
-| Context: video is about 258 tokens/s and audio about 25 tokens/s (128k window) | `context_window_compression=ContextWindowCompressionConfig(sliding_window=SlidingWindow(), trigger_tokens=...)`. The system instruction is always kept. |
+| Context: video is about 258 tokens/s and audio about 25 tokens/s (128k window) | `context_window_compression=ContextWindowCompressionConfig(sliding_window=SlidingWindow(), trigger_tokens=...)`. Sliding-window compression is **mandatory** in video mode. |
 | Need exactly-once message replay | `SessionResumptionConfig(transparent=True)` adds `last_consumed_client_message_index` |
 
-Zero-data-retention apps should not enable session resumption, because it caches context server-side.
+## Production wrapper: LiveRobotSession
+
+Use the pre-built `LiveRobotSession` from `gemini-robotics-er/scripts/er_tools.py`.
+`LiveRobotSession.receive()` ends at each `turn_complete` and must be called again for each subsequent turn:
+
+```python
+from er_tools import LiveRobotSession
+
+async with LiveRobotSession(client=genai.Client(), config=my_config, stop_robot_callback=robot.emergency_stop) as session:
+    while session_active:  # receive() yields until turn_complete, then exits; call again for next turn
+        async for msg in session.receive():
+            if msg.tool_call:
+                await session.send_tool_response([await execute_tool(msg.tool_call)])
+```
+
+### Error policy
+- **Stop robot while disconnected**: Always halt the robot via `stop_robot_callback()` while connection and session state are uncertain.
+- **Transient errors** (network drops, server `go_away`, timeouts): Reconnects cleanly using the saved resumption handle with exponential backoff (up to 3 attempts).
+- **Fatal errors** (auth, schema, invalid args): Halts the robot and raises immediately without retrying. Never swallow connection failures.
 
 ## Speech through TTS as a tool
 

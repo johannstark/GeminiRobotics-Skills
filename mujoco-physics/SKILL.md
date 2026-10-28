@@ -1,6 +1,6 @@
 ---
 name: mujoco-physics
-description: Simulates robots with MuJoCo in the browser (WebAssembly, @mujoco/mujoco or mujoco-js) or natively in Python (mujoco, MjSpec). Use for loading MJCF / MuJoCo Menagerie robots and their assets, stepping physics, reading and writing qpos/ctrl/xpos, actuators and grippers, contacts, offscreen RGB/depth/segmentation cameras, pixel-to-3D deprojection for vision models, damped-least-squares inverse kinematics, waypoint pick-and-place, recording episode videos, and debugging unstable or mis-loaded models.
+description: Simulates robots with MuJoCo in WebAssembly or Python (mujoco, MjSpec). Use when loading MJCF or MuJoCo Menagerie models (Panda, SO-100, SO-101, LeRobot, low-DOF arms), stepping physics, commanding position actuators via ctrl, configuring grippers or pad-based jaws with bitmask collisions, reading contacts and offscreen RGB-D cameras, solving 5-DOF or 7-DOF damped-least-squares inverse kinematics with strict residual checks, running waypoint pick-and-place with settle-on-convergence, integrating MuJoCo into web servers (FastAPI, render thread locks), or debugging unstable simulations.
 ---
 
 # MuJoCo physics (WASM and Python)
@@ -10,7 +10,7 @@ dynamic state. Call `mj_step` to advance time, and `mj_forward` to recompute der
 (`xpos`, `site_xpos`, `cam_xpos`, contacts) without advancing.
 
 Verified with `mujoco` 3.16 (Python), `@mujoco/mujoco` 3.16 and `mujoco-js` 0.0.7 (WASM, run under Bun),
-and Menagerie `franka_emika_panda`.
+Menagerie `franka_emika_panda`, and Menagerie `robotstudio_so101`.
 
 ## 1. Choose a runtime
 
@@ -22,9 +22,11 @@ and Menagerie `franka_emika_panda`.
 | MJX / MuJoCo Warp | Thousands of parallel envs on a GPU | Render a few with CPU MuJoCo | MuJoCo docs |
 
 IK, control and pick-and-place: `references/ik-and-control.md`.
-Tested end-to-end script: `scripts/panda_pick_place.py`. It builds the scene, renders RGB-D,
-converts an ER `[y, x]` point to 3D, runs DLS IK and a pick-and-place, verifies with contacts, and records an MP4.
-Run `python scripts/panda_pick_place.py --help`. It exits 0 when the cube ends up in the tray.
+Low-DOF arms (SO-100, SO-101, LeRobot, 5-DOF IK, pad jaws): `references/low-dof-arms.md`.
+Tested scripts (`pip install mujoco numpy pillow "imageio[ffmpeg]"`):
+- `scripts/panda_pick_place.py`: run `python mujoco-physics/scripts/panda_pick_place.py --help` or import `er_point_to_world`, `solve_ik_dls`, `run_pick_place`.
+- `scripts/so101_pick_place.py`: run `MUJOCO_GL=egl python mujoco-physics/scripts/so101_pick_place.py --menagerie mujoco_menagerie --trials 10 --seed 0` or import `solve_ik_5dof`, `run_so101_pick_place`.
+For simulation testing and fake bridges, see `references/python.md` and the `gemini-robotics-er` skill (`testing.md`).
 
 ## 2. Ten rules
 
