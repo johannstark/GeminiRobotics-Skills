@@ -37,9 +37,7 @@ Set `camera.up` **before** creating `OrbitControls`, because the controls cache 
 
 Geom conversion: `references/geom-conversion.md`. Python streaming & manifests: `references/remote-python.md`.
 Snapshots, perception camera, video, and pixel↔3D: `references/perception-and-video.md`.
-Tested scripts (`pip install mujoco playwright`):
-- `scripts/export_meshes.py`: run `MUJOCO_GL=egl python threejs-rendering/scripts/export_meshes.py --selftest` or import `export_compiled_meshes`.
-- `scripts/test_viewer_smoke.py`: run `python threejs-rendering/scripts/test_viewer_smoke.py` (headless smoke test; see `references/testing.md`).
+Tested scripts (`pip install mujoco playwright`, **run** them): `scripts/export_meshes.py` (`references/remote-python.md`) and `scripts/test_viewer_smoke.py` (`references/testing.md`).
 
 ## 3. Per-frame sync (approach A)
 
@@ -88,13 +86,7 @@ walking up to `userData.bodyID`. The hit is the top surface, so lower it to gras
 | Memory grows on reload | `geometry.dispose()`, `material.dispose()`, `renderTarget.dispose()`, and delete the WASM model and data |
 | Jank at high speed | Too many `mj_step` calls per frame. Cap the steps, or move physics to a Worker. |
 
-<details>
-<summary>Old patterns (version compatibility)</summary>
-
-The core library and addon examples must share one pinned Three.js version:
-- **r148+:** `examples/js` globals were removed; use ES modules from `three/examples/jsm/...`.
-- **r152+:** `renderer.outputEncoding` and `texture.encoding` were renamed to `outputColorSpace` and `colorSpace` (`THREE.SRGBColorSpace`).
-</details>
+Three.js version notes (r148 globals, r152 `colorSpace`): see `references/perception-and-video.md`.
 
 ## 6. In the Franka demo
 

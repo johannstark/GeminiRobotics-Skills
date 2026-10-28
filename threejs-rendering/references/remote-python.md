@@ -278,10 +278,10 @@ When embedding the Three.js viewer inside a FastAPI backend alongside Gradio:
    Stream camera frames over a dedicated route (`multipart/x-mixed-replace`). Polling `gr.Image` over HTTP freezes when round-trip latency exceeds frame duration.
 
 ```python
-import asyncio
+import asyncio, io
 from pathlib import Path
-import time
-from fastapi import FastAPI, Response
+from PIL import Image
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import gradio as gr
@@ -289,25 +289,26 @@ import gradio as gr
 app = FastAPI()
 
 # 1. Static assets and meshes with no-store cache control
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="static", check_dir=False), name="static")
+
+def get_jpeg_frame() -> bytes:  # placeholder: replace with your camera_render_thread.get_jpeg_frame()
+    buf = io.BytesIO()
+    Image.new("RGB", (64, 48), (40, 120, 200)).save(buf, format="JPEG", quality=80)
+    return buf.getvalue()
 
 @app.get("/viewer")
 def get_viewer():
-    html_content = Path("templates/viewer.html").read_text(encoding="utf-8")
-    return HTMLResponse(
-        content=html_content,
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
+    p = Path("templates/viewer.html")
+    html = p.read_text("utf-8") if p.exists() else "<!doctype html><title>Viewer</title>"
+    return HTMLResponse(html, headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"})
 
 # 2. MJPEG streaming response for live camera feed
 @app.get("/video_feed")
-def video_feed():
-    def frame_generator():
-        while True:
-            # Yield JPEG frame with multipart boundary
-            frame_bytes = camera_render_thread.get_jpeg_frame()
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n")
-            time.sleep(0.033)
+async def video_feed(request: Request):
+    async def frame_generator():
+        while not await request.is_disconnected():
+            yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + get_jpeg_frame() + b"\r\n"
+            await asyncio.sleep(0.033)
 
     return StreamingResponse(frame_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
